@@ -11,5 +11,5 @@ This project allows you to search PDF, Word, and Excel files for a list of speci
 
 1. Clone the repository:
    ```bash
-   git clone <repo-link>
+   git clone <https://github.com/zj0089/FIleSearchProject.git>
    cd FileSearchProject
