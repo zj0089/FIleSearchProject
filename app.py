@@ -76,7 +76,8 @@ def search_names_in_files(folder_path: str, names_list: List[str]) -> Dict[str, 
                                             'file': file,
                                             'type': 'PDF',
                                             'page': page_number + 1,
-                                            'occurrences': occurrences
+                                            'occurrences': occurrences,
+                                            'variation': variation  # Store the found variation
                                         })
 
             elif file.endswith('.docx'):
@@ -97,7 +98,8 @@ def search_names_in_files(folder_path: str, names_list: List[str]) -> Dict[str, 
                                 'folder_path': root,
                                 'file': file,
                                 'type': 'DOCX',
-                                'occurrences': occurrences
+                                'occurrences': occurrences,
+                                'variation': variation  # Store the found variation
                             })
 
             elif file.endswith('.xlsx'):
@@ -123,7 +125,8 @@ def search_names_in_files(folder_path: str, names_list: List[str]) -> Dict[str, 
                                                 'row': row_idx + 1,
                                                 'column': col_idx + 1,
                                                 'column_name': col_name,
-                                                'occurrences': occurrences
+                                                'occurrences': occurrences,
+                                                'variation': variation  # Store the found variation
                                             })
 
             else:
@@ -138,7 +141,7 @@ def save_results_to_excel(results: Dict[str, List[Dict]], output_file: str):
     sheet.title = "Search Results"
 
     # Add headers to the sheet
-    headers = ['Name', 'Folder Name', 'Folder Path', 'File', 'Type', 'Sheet', 'Page', 'Row', 'Column', 'Occurrences', 'Total Occurrences']
+    headers = ['Name', 'Name Variation', 'Folder Name', 'Folder Path', 'File', 'Type', 'Sheet', 'Page', 'Row', 'Column', 'Occurrences', 'Total Occurrences']
     sheet.append(headers)
 
     for name, entries in results.items():
@@ -146,6 +149,7 @@ def save_results_to_excel(results: Dict[str, List[Dict]], output_file: str):
         for entry in entries:
             row = [
                 name,
+                entry['variation'],  # Include the specific variation found
                 entry.get('folder_name'),
                 entry.get('folder_path'),
                 entry.get('file'),
