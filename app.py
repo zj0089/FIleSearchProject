@@ -6,10 +6,46 @@ import docx
 import pandas as pd
 from openpyxl import Workbook
 from typing import List, Dict
+import re
 
-# Function to search for names in files
+# Function to generate name variations, ensuring spaces between names and accounting for commas
+def generate_name_variations(name: str) -> List[str]:
+    # Remove any spaces around commas and split on both spaces and commas
+    parts = [part.strip() for part in name.replace(',', ' ').split()]
+    variations = {name}  # Start with the original name
+
+    # Generate variations based on the number of parts
+    if len(parts) == 2:
+        first, last = parts
+        variations.add(f"{last} {first}")  # Last First
+        variations.add(f"{first[0]} {last}")  # Initial Last
+        variations.add(f"{last} {first[0]}")  # Last Initial
+        variations.add(f"{last}, {first[0]}")  # Last, Initial
+
+    elif len(parts) == 3:
+        first, middle, last = parts
+        variations.add(f"{last} {first} {middle}")  # Last First Middle
+        variations.add(f"{first} {middle} {last}")  # First Middle Last
+        variations.add(f"{middle} {last} {first}")  # Middle Last First
+        variations.add(f"{last} {middle} {first}")  # Last Middle First
+        variations.add(f"{first[0]} {middle} {last}")  # Initial Middle Last
+        variations.add(f"{middle} {first[0]} {last}")  # Middle Initial Last
+        variations.add(f"{last} {first[0]} {middle}")  # Last Initial Middle
+        variations.add(f"{first[0]} {middle} {last}")  # Initial Middle Last
+        variations.add(f"{middle[0]} {last} {first}")  # Middle Initial Last
+        variations.add(f"{middle} {first} {last}")  # Middle First Last
+        variations.add(f"{first} {last} {middle}")  # First Last Middle
+        variations.add(f"{last}, {first[0]} {middle}")  # Last, Initial Middle
+        variations.add(f"{last}, {middle} {first[0]}")  # Last, Middle Initial
+
+    return list(variations)
+
+# Modify search_names_in_files to include variations
 def search_names_in_files(folder_path: str, names_list: List[str]) -> Dict[str, List[Dict]]:
     results = {}
+    # Generate variations for each name
+    names_variations = {name: generate_name_variations(name) for name in names_list}
+    
     for root, _, files in os.walk(folder_path):
         for file in files:
             file_path = os.path.join(root, file)
@@ -26,48 +62,33 @@ def search_names_in_files(folder_path: str, names_list: List[str]) -> Dict[str, 
                         page = reader.pages[page_number]
                         text = page.extract_text()
                         if text:  # Check if text extraction was successful
-                            for name in names_list:
-                                occurrences = text.lower().count(name.lower())
-                                if occurrences > 0:
-                                    if name not in results:
-                                        results[name] = []
-                                    results[name].append({
-                                        'folder_name': folder_name,
-                                        'folder_path': root,
-                                        'file': file,
-                                        'type': 'PDF',
-                                        'page': page_number + 1,
-                                        'occurrences': occurrences
-                                    })
+                            for name, variations in names_variations.items():
+                                for variation in variations:
+                                    # Use regular expression to match whole words
+                                    pattern = r'\b' + re.escape(variation) + r'\b'
+                                    occurrences = len(re.findall(pattern, text, flags=re.IGNORECASE))
+                                    if occurrences > 0:
+                                        if name not in results:
+                                            results[name] = []
+                                        results[name].append({
+                                            'folder_name': folder_name,
+                                            'folder_path': root,
+                                            'file': file,
+                                            'type': 'PDF',
+                                            'page': page_number + 1,
+                                            'occurrences': occurrences
+                                        })
 
             elif file.endswith('.docx'):
                 doc = docx.Document(file_path)
-                section_number = 1
                 text = ''
                 for para in doc.paragraphs:
                     text += para.text + ' '
-                    if para.text == '':  # Assuming an empty paragraph indicates a section break
-                        # Process text collected so far
-                        for name in names_list:
-                            occurrences = text.lower().count(name.lower())
-                            if occurrences > 0:
-                                if name not in results:
-                                    results[name] = []
-                                results[name].append({
-                                    'folder_name': folder_name,
-                                    'folder_path': root,
-                                    'file': file,
-                                    'type': 'DOCX',
-                                    'section': section_number,
-                                    'occurrences': occurrences
-                                })
-                        text = ''  # Reset text for the next section
-                        section_number += 1  # Increment section number
-
-                # Process any remaining text after the last section
-                if text:
-                    for name in names_list:
-                        occurrences = text.lower().count(name.lower())
+                for name, variations in names_variations.items():
+                    for variation in variations:
+                        # Use regular expression to match whole words
+                        pattern = r'\b' + re.escape(variation) + r'\b'
+                        occurrences = len(re.findall(pattern, text, flags=re.IGNORECASE))
                         if occurrences > 0:
                             if name not in results:
                                 results[name] = []
@@ -76,7 +97,6 @@ def search_names_in_files(folder_path: str, names_list: List[str]) -> Dict[str, 
                                 'folder_path': root,
                                 'file': file,
                                 'type': 'DOCX',
-                                'section': section_number,
                                 'occurrences': occurrences
                             })
 
@@ -85,24 +105,26 @@ def search_names_in_files(folder_path: str, names_list: List[str]) -> Dict[str, 
                 for sheet_name, sheet_data in df.items():
                     for row_idx, row in sheet_data.iterrows():
                         for col_idx, (col_name, value) in enumerate(row.items()):
-                            for name in names_list:
-                                if isinstance(value, str):
-                                    occurrences = value.lower().count(name.lower())
-                                    if occurrences > 0:
-                                        if name not in results:
-                                            results[name] = []
-                                        results[name].append({
-                                            'folder_name': folder_name,
-                                            'folder_path': root,
-                                            'file': file,
-                                            'type': 'Excel',
-                                            'sheet': sheet_name,
-                                            'row': row_idx + 1,
-                                            'row_name': sheet_data.index[row_idx] if hasattr(sheet_data.index, 'values') else '',  # Row label
-                                            'column': col_idx + 1,
-                                            'column_name': col_name,  # Column label
-                                            'occurrences': occurrences
-                                        })
+                            if isinstance(value, str):
+                                for name, variations in names_variations.items():
+                                    for variation in variations:
+                                        # Use regular expression to match whole words
+                                        pattern = r'\b' + re.escape(variation) + r'\b'
+                                        occurrences = len(re.findall(pattern, value, flags=re.IGNORECASE))
+                                        if occurrences > 0:
+                                            if name not in results:
+                                                results[name] = []
+                                            results[name].append({
+                                                'folder_name': folder_name,
+                                                'folder_path': root,
+                                                'file': file,
+                                                'type': 'Excel',
+                                                'sheet': sheet_name,
+                                                'row': row_idx + 1,
+                                                'column': col_idx + 1,
+                                                'column_name': col_name,
+                                                'occurrences': occurrences
+                                            })
 
             else:
                 continue
@@ -116,7 +138,7 @@ def save_results_to_excel(results: Dict[str, List[Dict]], output_file: str):
     sheet.title = "Search Results"
 
     # Add headers to the sheet
-    headers = ['Name', 'Folder Name', 'Folder Path', 'File', 'Type', 'Sheet', 'Page', 'Section', 'Row', 'Row Name', 'Column', 'Column Name', 'Occurrences', 'Total Occurrences']
+    headers = ['Name', 'Folder Name', 'Folder Path', 'File', 'Type', 'Sheet', 'Page', 'Row', 'Column', 'Occurrences', 'Total Occurrences']
     sheet.append(headers)
 
     for name, entries in results.items():
@@ -130,11 +152,8 @@ def save_results_to_excel(results: Dict[str, List[Dict]], output_file: str):
                 entry.get('type'),
                 entry.get('sheet', ''),
                 entry.get('page', ''),
-                entry.get('section', ''),
                 entry.get('row', ''),
-                entry.get('row_name', ''),
                 entry.get('column', ''),
-                entry.get('column_name', ''),
                 entry['occurrences'],
                 total_occurrences
             ]
@@ -165,7 +184,10 @@ def run_gui_app():
 
     def search_files():
         folder_path = folder_path_entry.get()
-        names_list = names_text.get("1.0", tk.END).strip().splitlines()
+        names_list = names_text.get("1.0", tk.END).strip()
+        
+        # Split names by both newlines and commas, then strip whitespace
+        names_list = [name.strip() for name in names_list.replace(',', '\n').splitlines() if name.strip()]
 
         if not folder_path or not names_list:
             messagebox.showwarning("Input Error", "Please provide a folder path and a list of names.")
@@ -181,8 +203,7 @@ def run_gui_app():
                         tk.END,
                         f"  - Folder: {entry['folder_name']} (Path: {entry['folder_path']}), File: {entry['file']} "
                         f"(Type: {entry['type']}, Sheet: {entry.get('sheet', '')}, Page: {entry.get('page', '')}, "
-                        f"Section: {entry.get('section', '')}, Row: {entry.get('row', '')}, Row Name: {entry.get('row_name', '')}, "
-                        f"Column: {entry.get('column', '')}, Column Name: {entry.get('column_name', '')}): {entry['occurrences']} occurrence(s)\n"
+                        f"Row: {entry.get('row', '')}, Column: {entry.get('column', '')}): {entry['occurrences']} occurrence(s)\n"
                     )
                 result_text.insert(tk.END, "\n")
             save_results_to_excel(results, 'search_results.xlsx')  # Save results to Excel
