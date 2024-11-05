@@ -55,64 +55,19 @@ def search_names_in_files(folder_path: str, names_list: List[str]) -> Dict[str, 
             if file.startswith('~$'):
                 continue
             
+            # Process PDF files
             if file.endswith('.pdf'):
-                with open(file_path, 'rb') as pdf_file:
-                    reader = PyPDF2.PdfReader(pdf_file)
-                    for page_number in range(len(reader.pages)):
-                        page = reader.pages[page_number]
-                        text = page.extract_text()
-                        if text:  # Check if text extraction was successful
-                            for name, variations in names_variations.items():
-                                for variation in variations:
-                                    # Use regular expression to match whole words
-                                    pattern = r'\b' + re.escape(variation) + r'\b'
-                                    occurrences = len(re.findall(pattern, text, flags=re.IGNORECASE))
-                                    if occurrences > 0:
-                                        if name not in results:
-                                            results[name] = []
-                                        results[name].append({
-                                            'folder_name': folder_name,
-                                            'folder_path': root,
-                                            'file': file,
-                                            'type': 'PDF',
-                                            'page': page_number + 1,
-                                            'occurrences': occurrences,
-                                            'variation': variation  # Store the found variation
-                                        })
-
-            elif file.endswith('.docx'):
-                doc = docx.Document(file_path)
-                text = ''
-                for para in doc.paragraphs:
-                    text += para.text + ' '
-                for name, variations in names_variations.items():
-                    for variation in variations:
-                        # Use regular expression to match whole words
-                        pattern = r'\b' + re.escape(variation) + r'\b'
-                        occurrences = len(re.findall(pattern, text, flags=re.IGNORECASE))
-                        if occurrences > 0:
-                            if name not in results:
-                                results[name] = []
-                            results[name].append({
-                                'folder_name': folder_name,
-                                'folder_path': root,
-                                'file': file,
-                                'type': 'DOCX',
-                                'occurrences': occurrences,
-                                'variation': variation  # Store the found variation
-                            })
-
-            elif file.endswith('.xlsx'):
-                df = pd.read_excel(file_path, sheet_name=None)  # Load all sheets
-                for sheet_name, sheet_data in df.items():
-                    for row_idx, row in sheet_data.iterrows():
-                        for col_idx, (col_name, value) in enumerate(row.items()):
-                            if isinstance(value, str):
+                try:
+                    with open(file_path, 'rb') as pdf_file:
+                        reader = PyPDF2.PdfReader(pdf_file)
+                        for page_number in range(len(reader.pages)):
+                            page = reader.pages[page_number]
+                            text = page.extract_text()
+                            if text:  # Check if text extraction was successful
                                 for name, variations in names_variations.items():
                                     for variation in variations:
-                                        # Use regular expression to match whole words
                                         pattern = r'\b' + re.escape(variation) + r'\b'
-                                        occurrences = len(re.findall(pattern, value, flags=re.IGNORECASE))
+                                        occurrences = len(re.findall(pattern, text, flags=re.IGNORECASE))
                                         if occurrences > 0:
                                             if name not in results:
                                                 results[name] = []
@@ -120,16 +75,73 @@ def search_names_in_files(folder_path: str, names_list: List[str]) -> Dict[str, 
                                                 'folder_name': folder_name,
                                                 'folder_path': root,
                                                 'file': file,
-                                                'type': 'Excel',
-                                                'sheet': sheet_name,
-                                                'row': row_idx + 1,
-                                                'column': col_idx + 1,
-                                                'column_name': col_name,
+                                                'type': 'PDF',
+                                                'page': page_number + 1,
                                                 'occurrences': occurrences,
-                                                'variation': variation  # Store the found variation
+                                                'variation': variation
                                             })
+                except PyPDF2.errors.PdfReadError:
+                    print(f"Error: Unable to read encrypted or unreadable PDF file: {file_path}")
+                except Exception as e:
+                    print(f"Error: Unable to process PDF file {file_path} due to {str(e)}")
+
+            # Process DOCX files
+            elif file.endswith('.docx'):
+                try:
+                    doc = docx.Document(file_path)
+                    text = ''
+                    for para in doc.paragraphs:
+                        text += para.text + ' '
+                    for name, variations in names_variations.items():
+                        for variation in variations:
+                            pattern = r'\b' + re.escape(variation) + r'\b'
+                            occurrences = len(re.findall(pattern, text, flags=re.IGNORECASE))
+                            if occurrences > 0:
+                                if name not in results:
+                                    results[name] = []
+                                results[name].append({
+                                    'folder_name': folder_name,
+                                    'folder_path': root,
+                                    'file': file,
+                                    'type': 'DOCX',
+                                    'occurrences': occurrences,
+                                    'variation': variation
+                                })
+                except Exception as e:
+                    print(f"Error: Unable to process DOCX file {file_path} due to {str(e)}")
+
+            # Process XLSX files
+            elif file.endswith('.xlsx'):
+                try:
+                    df = pd.read_excel(file_path, sheet_name=None)  # Load all sheets
+                    for sheet_name, sheet_data in df.items():
+                        for row_idx, row in sheet_data.iterrows():
+                            for col_idx, (col_name, value) in enumerate(row.items()):
+                                if isinstance(value, str):
+                                    for name, variations in names_variations.items():
+                                        for variation in variations:
+                                            pattern = r'\b' + re.escape(variation) + r'\b'
+                                            occurrences = len(re.findall(pattern, value, flags=re.IGNORECASE))
+                                            if occurrences > 0:
+                                                if name not in results:
+                                                    results[name] = []
+                                                results[name].append({
+                                                    'folder_name': folder_name,
+                                                    'folder_path': root,
+                                                    'file': file,
+                                                    'type': 'Excel',
+                                                    'sheet': sheet_name,
+                                                    'row': row_idx + 1,
+                                                    'column': col_idx + 1,
+                                                    'column_name': col_name,
+                                                    'occurrences': occurrences,
+                                                    'variation': variation
+                                                })
+                except Exception as e:
+                    print(f"Error: Unable to process XLSX file {file_path} due to {str(e)}")
 
             else:
+                # Skip unsupported file types without error messages
                 continue
 
     return results
