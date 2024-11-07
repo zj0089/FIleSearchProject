@@ -2,179 +2,177 @@ import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, Scrollbar
 import PyPDF2
+import pdfplumber
+import fitz  # PyMuPDF
+import pytesseract
+from PIL import Image
 import docx
 import pandas as pd
 from openpyxl import Workbook
 from typing import List, Dict
 import re
+from functools import lru_cache
+import itertools
+import unidecode
 
-# Function to generate name variations, ensuring spaces between names and accounting for commas
-def generate_name_variations(name: str) -> List[str]:
-    # Remove any spaces around commas and split on both spaces and commas
-    parts = [part.strip() for part in name.replace(',', ' ').split()]
-    variations = {name}  # Start with the original name
+# Function to clear the cache of generate_name_variations
+def clear_cache():
+    generate_name_variations.cache_clear()
 
-    # Generate variations based on the number of parts
-    if len(parts) == 2:
-        first, last = parts
-        variations.add(f"{last} {first}")  # Last First
-        variations.add(f"{first[0]} {last}")  # Initial Last
-        variations.add(f"{last} {first[0]}")  # Last Initial
-        variations.add(f"{last}, {first[0]}")  # Last, Initial
+def search_names_in_text(text: str, variations: set) -> dict:
+    results = {}
+    text = text.lower()  # Normalize the text to lower case for case-insensitive matching
+    for variation in variations:
+        # Check if the variation consists of at least two parts (assumes parts are separated by spaces)
+        if len(variation.split()) >= 2:
+            pattern = re.compile(r'\b' + re.escape(variation) + r'\b', re.IGNORECASE)
+            matches = pattern.findall(text)
+            if matches:
+                # Increment counts for each found variation
+                found_variation = variation  # The variation as found in the text
+                results[found_variation] = len(matches)
+    return results
 
-    elif len(parts) == 3:
-        first, middle, last = parts
-        variations.add(f"{last} {first} {middle}")  # Last First Middle
-        variations.add(f"{first} {middle} {last}")  # First Middle Last
-        variations.add(f"{middle} {last} {first}")  # Middle Last First
-        variations.add(f"{last} {middle} {first}")  # Last Middle First
-        variations.add(f"{first[0]} {middle} {last}")  # Initial Middle Last
-        variations.add(f"{middle} {first[0]} {last}")  # Middle Initial Last
-        variations.add(f"{last} {first[0]} {middle}")  # Last Initial Middle
-        variations.add(f"{first[0]} {middle} {last}")  # Initial Middle Last
-        variations.add(f"{middle[0]} {last} {first}")  # Middle Initial Last
-        variations.add(f"{middle} {first} {last}")  # Middle First Last
-        variations.add(f"{first} {last} {middle}")  # First Last Middle
-        variations.add(f"{last}, {first[0]} {middle}")  # Last, Initial Middle
-        variations.add(f"{last}, {middle} {first[0]}")  # Last, Middle Initial
+# Caching name variations for efficiency@lru_cache(maxsize=None)
+@lru_cache(maxsize=None)
+def generate_name_variations(name: str) -> set:
+    # Normalize and split the name into parts, accounting for spaces and hyphens
+    parts = [unidecode.unidecode(part.strip()) for part in re.split(r'[\s,;]+', name.replace('-', ' - ')) if part.strip()]
+    variations = set()
 
-    return list(variations)
+    # Helper function to generate variations with initials, punctuations, and specific formats
+    def add_variations(parts_list):
+        full_variation = ' '.join(parts_list)
+        variations.add(full_variation)
+        if '-' in full_variation:
+            variations.add(full_variation.replace(' - ', '-'))
 
-# Modify search_names_in_files to include variations
+        # Generate combinations with initials, avoiding all initials combo
+        if len(parts_list) > 1:
+            for index in range(len(parts_list)):
+                # First part as initial followed by the rest
+                if index == 0:
+                    variations.add(parts_list[0][0] + '. ' + ' '.join(parts_list[1:]))
+                # Last part as initial preceded by the rest
+                elif index == len(parts_list) - 1:
+                    variations.add(' '.join(parts_list[:-1]) + ' ' + parts_list[-1][0] + '.')
+                # Middle parts as initials, with leading and trailing parts full
+                else:
+                    initial_variation = parts_list[:index] + [parts_list[index][0] + '.'] + parts_list[index+1:]
+                    variations.add(' '.join(initial_variation))
+
+                # Combinations of part with comma and initial (e.g., "Olmedo, L.")
+                variations.add(parts_list[index] + ', ' + parts_list[0][0] + '.')
+
+    # Specific combinations for names with exactly four parts
+    if len(parts) == 4:
+        add_variations([parts[0], parts[1]])  # 1st + 1st middle
+        add_variations([parts[0], parts[2]])  # 1st + 2nd middle
+        add_variations([parts[0], parts[3]])  # 1st + last
+        add_variations([parts[0], parts[1], parts[3]])  # 1st + 1st middle + last
+        add_variations([parts[0], parts[2], parts[3]])  # 1st + 2nd middle + last
+    else:
+        # Generate variations for names with less than 4 parts
+        for num_parts in range(2, len(parts) + 1):
+            for combo in itertools.combinations(parts, num_parts):
+                add_variations(list(combo))
+
+    return variations
+
+
+# Extract text from PDF, optimizing for text, forms, and tables
+def extract_text_from_pdf(file_path: str) -> Dict[int, str]:
+    text_by_page = {}
+    with pdfplumber.open(file_path) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text()
+            if text:
+                text_by_page[page.page_number] = text
+    return text_by_page
+
+def extract_text_from_docx(file_path: str) -> Dict[int, str]:
+    text_by_page = {}
+    doc = docx.Document(file_path)
+    text = []
+    for para in doc.paragraphs:
+        text.append(para.text)
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                text.append(cell.text)
+    text_by_page[1] = '\n'.join(text)
+    return text_by_page
+
+def extract_text_from_xlsx(file_path: str) -> Dict[int, str]:
+    text_by_page = {}
+    xls = pd.ExcelFile(file_path)
+    for sheet_name in xls.sheet_names:
+        df = pd.read_excel(xls, sheet_name)
+        text_content = df.to_string(header=True, index=False)
+        text_by_page[sheet_name] = text_content
+    return text_by_page
+
+# Function to search for names in files, updating to capture found variations
 def search_names_in_files(folder_path: str, names_list: List[str]) -> Dict[str, List[Dict]]:
     results = {}
-    # Generate variations for each name
     names_variations = {name: generate_name_variations(name) for name in names_list}
-    
-    for root, _, files in os.walk(folder_path):
+
+    for root, dirs, files in os.walk(folder_path):
         for file in files:
             file_path = os.path.join(root, file)
-            folder_name = os.path.basename(root)
-
-            # Skip temporary files
             if file.startswith('~$'):
                 continue
-            
-            # Process PDF files
-            if file.endswith('.pdf'):
-                try:
-                    with open(file_path, 'rb') as pdf_file:
-                        reader = PyPDF2.PdfReader(pdf_file)
-                        for page_number in range(len(reader.pages)):
-                            page = reader.pages[page_number]
-                            text = page.extract_text()
-                            if text:  # Check if text extraction was successful
-                                for name, variations in names_variations.items():
-                                    for variation in variations:
-                                        pattern = r'\b' + re.escape(variation) + r'\b'
-                                        occurrences = len(re.findall(pattern, text, flags=re.IGNORECASE))
-                                        if occurrences > 0:
-                                            if name not in results:
-                                                results[name] = []
-                                            results[name].append({
-                                                'folder_name': folder_name,
-                                                'folder_path': root,
-                                                'file': file,
-                                                'type': 'PDF',
-                                                'page': page_number + 1,
-                                                'occurrences': occurrences,
-                                                'variation': variation
-                                            })
-                except PyPDF2.errors.PdfReadError:
-                    print(f"Error: Unable to read encrypted or unreadable PDF file: {file_path}")
-                except Exception as e:
-                    print(f"Error: Unable to process PDF file {file_path} due to {str(e)}")
 
-            # Process DOCX files
-            elif file.endswith('.docx'):
-                try:
-                    doc = docx.Document(file_path)
-                    text = ''
-                    for para in doc.paragraphs:
-                        text += para.text + ' '
+            try:
+                text_by_page = {}
+                if file.endswith('.pdf'):
+                    text_by_page = extract_text_from_pdf(file_path)
+                elif file.endswith('.docx'):
+                    text_by_page = extract_text_from_docx(file_path)
+                elif file.endswith('.xlsx'):
+                    text_by_page = extract_text_from_xlsx(file_path)
+
+                for page_num, page_text in text_by_page.items():
                     for name, variations in names_variations.items():
-                        for variation in variations:
-                            pattern = r'\b' + re.escape(variation) + r'\b'
-                            occurrences = len(re.findall(pattern, text, flags=re.IGNORECASE))
-                            if occurrences > 0:
-                                if name not in results:
-                                    results[name] = []
-                                results[name].append({
-                                    'folder_name': folder_name,
-                                    'folder_path': root,
-                                    'file': file,
-                                    'type': 'DOCX',
-                                    'occurrences': occurrences,
-                                    'variation': variation
-                                })
-                except Exception as e:
-                    print(f"Error: Unable to process DOCX file {file_path} due to {str(e)}")
+                        found_results = search_names_in_text(page_text, variations)
+                        for found_variation, occurrences in found_results.items():
+                            results.setdefault(name, []).append({
+                                'folder_name': os.path.basename(root),
+                                'folder_path': root,
+                                'file': file,
+                                'type': file.split('.')[-1].upper(),
+                                'page': page_num,
+                                'occurrences': occurrences,
+                                'variation': found_variation
+                            })
 
-            # Process XLSX files
-            elif file.endswith('.xlsx'):
-                try:
-                    df = pd.read_excel(file_path, sheet_name=None)  # Load all sheets
-                    for sheet_name, sheet_data in df.items():
-                        for row_idx, row in sheet_data.iterrows():
-                            for col_idx, (col_name, value) in enumerate(row.items()):
-                                if isinstance(value, str):
-                                    for name, variations in names_variations.items():
-                                        for variation in variations:
-                                            pattern = r'\b' + re.escape(variation) + r'\b'
-                                            occurrences = len(re.findall(pattern, value, flags=re.IGNORECASE))
-                                            if occurrences > 0:
-                                                if name not in results:
-                                                    results[name] = []
-                                                results[name].append({
-                                                    'folder_name': folder_name,
-                                                    'folder_path': root,
-                                                    'file': file,
-                                                    'type': 'Excel',
-                                                    'sheet': sheet_name,
-                                                    'row': row_idx + 1,
-                                                    'column': col_idx + 1,
-                                                    'column_name': col_name,
-                                                    'occurrences': occurrences,
-                                                    'variation': variation
-                                                })
-                except Exception as e:
-                    print(f"Error: Unable to process XLSX file {file_path} due to {str(e)}")
-
-            else:
-                # Skip unsupported file types without error messages
-                continue
+            except Exception as e:
+                print(f"Error processing {file_path}: {str(e)}")
 
     return results
 
-# Function to save results to Excel using openpyxl
+
+# Save results to Excel using openpyxl
 def save_results_to_excel(results: Dict[str, List[Dict]], output_file: str):
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "Search Results"
-
-    # Add headers to the sheet
-    headers = ['Name', 'Name Variation', 'Folder Name', 'Folder Path', 'File', 'Type', 'Sheet', 'Page', 'Row', 'Column', 'Occurrences', 'Total Occurrences']
+    headers = ['Name', 'Name Variation', 'Folder Name', 'Folder Path', 'File', 'Type', 'Sheet', 'Page', 'Occurrences']
     sheet.append(headers)
-
     for name, entries in results.items():
-        total_occurrences = sum(entry['occurrences'] for entry in entries)
         for entry in entries:
             row = [
                 name,
-                entry['variation'],  # Include the specific variation found
-                entry.get('folder_name'),
-                entry.get('folder_path'),
-                entry.get('file'),
-                entry.get('type'),
+                entry['variation'],
+                entry['folder_name'],
+                entry['folder_path'],
+                entry['file'],
+                entry['type'],
                 entry.get('sheet', ''),
                 entry.get('page', ''),
-                entry.get('row', ''),
-                entry.get('column', ''),
-                entry['occurrences'],
-                total_occurrences
+                entry['occurrences']
             ]
             sheet.append(row)
-
     workbook.save(output_file)
 
 # GUI application
